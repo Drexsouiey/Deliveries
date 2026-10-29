@@ -11,9 +11,13 @@ button{background:#1a73e8;color:#fff;border:0;border-radius:6px}
 .card{background:#fff;padding:10px;margin:8px 0;border-radius:8px}
 .card img{width:100%;border-radius:6px;margin-top:6px}
 .row{display:flex;gap:6px}.del{background:#d33}.alt{background:#2e7d32}.ed{background:#f9a825}
-#msg{color:#2e7d32;font-size:14px}
+#scanbox{display:none;background:#000;border-radius:8px;padding:6px;margin:6px 0}
+#scanbox video{width:100%;border-radius:6px}
 </style></head><body>
 <h2>Delivery Tracker</h2>
+<button onclick="scan()">📷 Scan QR</button>
+<div id="scanbox"><video id="cam" playsinline muted></video>
+<button class="del" onclick="stopScan()">Cancel scan</button></div>
 <input id="q" placeholder="Search recipient name or address..." oninput="show()">
 <details id="form"><summary><b>+ New / edit recipient</b></summary>
 <input id="f_name" placeholder="Recipient name">
@@ -23,7 +27,6 @@ button{background:#1a73e8;color:#fff;border:0;border-radius:6px}
 <button onclick="gps()">📍 Save my current location</button>
 <div id="f_loc"></div>
 <button onclick="save()">Save</button>
-<div id="msg"></div>
 </details>
 <div id="list"></div>
 <div class="row"><button onclick="exp()">Backup</button>
@@ -39,7 +42,28 @@ const db=new Promise(r=>{const q=indexedDB.open('trk',1);
 const tx=async(m,f)=>{const d=await db;return new Promise(r=>{
  const t=d.transaction('r',m),x=f(t.objectStore('r'));t.oncomplete=()=>r(x&&x.result)})};
 const all=()=>tx('readonly',s=>s.getAll()),put=o=>tx('readwrite',s=>s.put(o)),rm=id=>tx('readwrite',s=>s.delete(id));
-let pos=null,editId=null;
+let pos=null,editId=null,stream=null;
+async function scan(){
+ if(!('BarcodeDetector' in window)){alert('QR scanning is not supported in this browser. Open the app in Chrome.');return}
+ const det=new BarcodeDetector({formats:['qr_code']});
+ try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}})}
+ catch(e){alert('Camera permission was blocked.');return}
+ const v=$('cam');v.srcObject=stream;await v.play();$('scanbox').style.display='block';
+ const loop=async()=>{
+  if(!stream)return;
+  try{const r=await det.detect(v);
+   if(r.length){const t=r[0].rawValue;stopScan();gotQR(t);return}}catch(e){}
+  setTimeout(loop,250)};
+ loop()}
+function stopScan(){
+ if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}
+ $('scanbox').style.display='none'}
+async function gotQR(t){
+ $('q').value=t;await show();
+ if(!$('list').children.length){
+  $('q').value='';await show();
+  clearForm();$('f_name').value=t;$('form').open=true;
+  alert('No saved match. Check the name, add the address and photo, then Save.')}}
 function gps(){navigator.geolocation.getCurrentPosition(p=>{
  pos={lat:p.coords.latitude,lng:p.coords.longitude};
  $('f_loc').textContent='Location saved: '+pos.lat.toFixed(5)+', '+pos.lng.toFixed(5)},
