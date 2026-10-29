@@ -1,0 +1,91 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1a73e8">
+<title>Delivery Tracker</title>
+<style>
+body{font-family:sans-serif;margin:0;padding:12px;background:#f4f4f4}
+input,textarea,button{width:100%;box-sizing:border-box;padding:10px;margin:4px 0;font-size:16px}
+button{background:#1a73e8;color:#fff;border:0;border-radius:6px}
+.card{background:#fff;padding:10px;margin:8px 0;border-radius:8px}
+.card img{width:100%;border-radius:6px;margin-top:6px}
+.row{display:flex;gap:6px}.del{background:#d33}.alt{background:#2e7d32}.ed{background:#f9a825}
+#msg{color:#2e7d32;font-size:14px}
+</style></head><body>
+<h2>Delivery Tracker</h2>
+<input id="q" placeholder="Search recipient name or address..." oninput="show()">
+<details id="form"><summary><b>+ New / edit recipient</b></summary>
+<input id="f_name" placeholder="Recipient name">
+<input id="f_addr" placeholder="Address (street / block)">
+<textarea id="f_notes" placeholder="How to find the house (landmark, gate color...)"></textarea>
+<input type="file" id="f_photo" accept="image/*" capture="environment">
+<button onclick="gps()">📍 Save my current location</button>
+<div id="f_loc"></div>
+<button onclick="save()">Save</button>
+<div id="msg"></div>
+</details>
+<div id="list"></div>
+<div class="row"><button onclick="exp()">Backup</button>
+<button onclick="$('imp').click()">Restore</button></div>
+<input type="file" id="imp" accept=".json" style="display:none" onchange="imp(this.files[0])">
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const norm=s=>String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+const db=new Promise(r=>{const q=indexedDB.open('trk',1);
+ q.onupgradeneeded=()=>q.result.createObjectStore('r',{keyPath:'id'});
+ q.onsuccess=()=>r(q.result)});
+const tx=async(m,f)=>{const d=await db;return new Promise(r=>{
+ const t=d.transaction('r',m),x=f(t.objectStore('r'));t.oncomplete=()=>r(x&&x.result)})};
+const all=()=>tx('readonly',s=>s.getAll()),put=o=>tx('readwrite',s=>s.put(o)),rm=id=>tx('readwrite',s=>s.delete(id));
+let pos=null,editId=null;
+function gps(){navigator.geolocation.getCurrentPosition(p=>{
+ pos={lat:p.coords.latitude,lng:p.coords.longitude};
+ $('f_loc').textContent='Location saved: '+pos.lat.toFixed(5)+', '+pos.lng.toFixed(5)},
+ ()=>$('f_loc').textContent='Location denied',{enableHighAccuracy:true})}
+function resize(f){return new Promise(r=>{if(!f)return r('');
+ const i=new Image();i.onload=()=>{const s=700/Math.max(i.width,i.height,700),c=document.createElement('canvas');
+ c.width=i.width*s;c.height=i.height*s;c.getContext('2d').drawImage(i,0,0,c.width,c.height);
+ r(c.toDataURL('image/jpeg',.7))};i.src=URL.createObjectURL(f)})}
+function clearForm(){['f_name','f_addr','f_notes','f_photo'].forEach(i=>$(i).value='');
+ pos=null;editId=null;$('f_loc').textContent=''}
+async function save(){
+ const name=$('f_name').value.trim();
+ if(!name){alert('Enter the recipient name');return}
+ const addr=$('f_addr').value.trim(),img=await resize($('f_photo').files[0]),
+  today=new Date().toLocaleDateString(),list=await all();
+ let x=editId?list.find(d=>d.id==editId)
+  :list.find(d=>norm(d.name)==norm(name)&&norm(d.addr)==norm(addr));
+ let m;
+ if(x){const ed=!!editId;
+  Object.assign(x,{name,addr,notes:$('f_notes').value||x.notes});
+  if(img)x.img=img;if(pos)x.pos=pos;
+  if(!ed){x.runs++;x.last=today}
+  m=ed?'Updated':'Existing house found: +1 delivery'}
+ else{x={id:Date.now(),name,addr,notes:$('f_notes').value,img,pos,runs:1,last:today};
+  m=list.some(d=>norm(d.name)==norm(name))?'Same name, different address: saved as separate record':'New recipient saved'}
+ await put(x);clearForm();$('form').open=false;$('q').value=name;await show();alert(m)}
+async function edit(id){const x=(await all()).find(d=>d.id==id);editId=id;pos=x.pos;
+ $('f_name').value=x.name;$('f_addr').value=x.addr;$('f_notes').value=x.notes;
+ $('f_loc').textContent=x.pos?'Keeping saved location':'';$('form').open=true;scrollTo(0,0)}
+async function again(id){const x=(await all()).find(d=>d.id==id);x.runs++;x.last=new Date().toLocaleDateString();await put(x);show()}
+async function del(id){if(confirm('Delete this record?')){await rm(id);show()}}
+async function show(){
+ const k=$('q').value.toLowerCase(),list=(await all()).sort((a,b)=>b.id-a.id);
+ $('list').innerHTML=list.filter(x=>(x.name+' '+x.addr+' '+x.notes).toLowerCase().includes(k)).map(x=>`
+ <div class="card"><b>${esc(x.name)}</b><br>${esc(x.addr)}<br>${esc(x.notes)}<br>
+ <small>Deliveries: ${x.runs} · Last: ${esc(x.last)}</small>
+ ${x.img?`<img src="${x.img}">`:''}
+ ${x.pos?`<br><a href="https://maps.google.com/?q=${x.pos.lat},${x.pos.lng}">🗺 Where's the house</a>`:''}
+ <div class="row"><button class="alt" onclick="again(${x.id})">+1</button>
+ <button class="ed" onclick="edit(${x.id})">Edit</button>
+ <button class="del" onclick="del(${x.id})">Delete</button></div></div>`).join('')}
+async function exp(){const a=document.createElement('a');
+ a.href=URL.createObjectURL(new Blob([JSON.stringify(await all())],{type:'application/json'}));
+ a.download='deliveries-backup.json';a.click()}
+async function imp(f){if(!f)return;const a=JSON.parse(await f.text());
+ for(const o of a)await put(o);show();alert('Restored '+a.length+' records')}
+if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js');
+show();
+</script></body></html>
