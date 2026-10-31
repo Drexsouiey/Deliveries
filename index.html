@@ -11,6 +11,8 @@ button{background:#1a73e8;color:#fff;border:0;border-radius:6px}
 .card{background:#fff;padding:10px;margin:8px 0;border-radius:8px}
 .card img{width:100%;border-radius:6px;margin-top:6px}
 .row{display:flex;gap:6px}.del{background:#d33}.alt{background:#2e7d32}.ed{background:#f9a825}
+a.btn{flex:1;display:block;text-align:center;background:#6a1b9a;color:#fff;padding:10px;border-radius:6px;text-decoration:none;margin:4px 0}
+.loc{font-size:13px;color:#333;margin-top:4px}
 #scanbox{display:none;background:#000;border-radius:8px;padding:6px;margin:6px 0}
 #scanbox video{width:100%;border-radius:6px}
 </style></head><body>
@@ -24,7 +26,7 @@ button{background:#1a73e8;color:#fff;border:0;border-radius:6px}
 <input id="f_addr" placeholder="Address (street / block)">
 <textarea id="f_notes" placeholder="How to find the house (landmark, gate color...)"></textarea>
 <input type="file" id="f_photo" accept="image/*" capture="environment">
-<button onclick="gps()">📍 Save my current location</button>
+<button onclick="gps()">📍 Save house location (stand at the gate)</button>
 <div id="f_loc"></div>
 <button onclick="save()">Save</button>
 </details>
@@ -42,7 +44,38 @@ const db=new Promise(r=>{const q=indexedDB.open('trk',1);
 const tx=async(m,f)=>{const d=await db;return new Promise(r=>{
  const t=d.transaction('r',m),x=f(t.objectStore('r'));t.oncomplete=()=>r(x&&x.result)})};
 const all=()=>tx('readonly',s=>s.getAll()),put=o=>tx('readwrite',s=>s.put(o)),rm=id=>tx('readwrite',s=>s.delete(id));
-let pos=null,editId=null,stream=null;
+let pos=null,editId=null,stream=null,me=null;
+
+/* ---------- GPS ---------- */
+function getFix(done,say){
+ if(!navigator.geolocation){say('GPS not available');return}
+ let best=null;say('Getting GPS, stay outside and keep still (8 sec)...');
+ const id=navigator.geolocation.watchPosition(p=>{
+  const c=p.coords;
+  if(!best||c.accuracy<best.acc){best={lat:c.latitude,lng:c.longitude,acc:Math.round(c.accuracy)};
+   say('Best so far: ±'+best.acc+' m')}},
+  ()=>{},{enableHighAccuracy:true,maximumAge:0});
+ setTimeout(()=>{navigator.geolocation.clearWatch(id);
+  if(!best){say('Location denied or unavailable');return}
+  say('Saved: '+best.lat.toFixed(5)+', '+best.lng.toFixed(5)+' (±'+best.acc+' m)'+(best.acc>30?' - weak signal, try again outdoors':''));
+  done(best)},8000)}
+function gps(){getFix(p=>{pos=p},m=>$('f_loc').textContent=m)}
+function updLoc(id){
+ if(!confirm('Replace the saved location with where you are standing now? Only do this at the house.'))return;
+ getFix(async p=>{const x=(await all()).find(d=>d.id==id);x.pos=p;await put(x);await show();
+  if(p.acc>30)alert('Saved, but the signal is weak (±'+p.acc+' m). Try again outdoors for a better pin.')},
+  m=>{const e=$('st'+id);if(e)e.textContent=m})}
+function locateMe(){
+ if(!navigator.geolocation)return;
+ navigator.geolocation.getCurrentPosition(p=>{me={lat:p.coords.latitude,lng:p.coords.longitude};show()},
+  ()=>{},{enableHighAccuracy:true,maximumAge:30000,timeout:15000})}
+function dist(a,b){
+ const R=6371000,t=x=>x*Math.PI/180,dl=t(b.lat-a.lat),dn=t(b.lng-a.lng);
+ const h=Math.sin(dl/2)**2+Math.cos(t(a.lat))*Math.cos(t(b.lat))*Math.sin(dn/2)**2;
+ const m=2*R*Math.asin(Math.sqrt(h));
+ return m<1000?Math.round(m)+' m':(m/1000).toFixed(1)+' km'}
+
+/* ---------- QR ---------- */
 async function scan(){
  if(!('BarcodeDetector' in window)){alert('QR scanning is not supported in this browser. Open the app in Chrome.');return}
  const det=new BarcodeDetector({formats:['qr_code']});
@@ -64,10 +97,8 @@ async function gotQR(t){
   $('q').value='';await show();
   clearForm();$('f_name').value=t;$('form').open=true;
   alert('No saved match. Check the name, add the address and photo, then Save.')}}
-function gps(){navigator.geolocation.getCurrentPosition(p=>{
- pos={lat:p.coords.latitude,lng:p.coords.longitude};
- $('f_loc').textContent='Location saved: '+pos.lat.toFixed(5)+', '+pos.lng.toFixed(5)},
- ()=>$('f_loc').textContent='Location denied',{enableHighAccuracy:true})}
+
+/* ---------- Records ---------- */
 function resize(f){return new Promise(r=>{if(!f)return r('');
  const i=new Image();i.onload=()=>{const s=700/Math.max(i.width,i.height,700),c=document.createElement('canvas');
  c.width=i.width*s;c.height=i.height*s;c.getContext('2d').drawImage(i,0,0,c.width,c.height);
@@ -101,7 +132,12 @@ async function show(){
  <div class="card"><b>${esc(x.name)}</b><br>${esc(x.addr)}<br>${esc(x.notes)}<br>
  <small>Deliveries: ${x.runs} · Last: ${esc(x.last)}</small>
  ${x.img?`<img src="${x.img}">`:''}
- ${x.pos?`<br><a href="https://maps.google.com/?q=${x.pos.lat},${x.pos.lng}">🗺 Where's the house</a>`:''}
+ ${x.pos?`<div class="loc">📍 ${x.pos.lat.toFixed(5)}, ${x.pos.lng.toFixed(5)}${x.pos.acc?' (±'+x.pos.acc+' m)':''}${me?' · '+dist(me,x.pos)+' from you':''}</div>
+ <div class="row"><a class="btn" href="https://www.google.com/maps/dir/?api=1&destination=${x.pos.lat},${x.pos.lng}&travelmode=driving">🧭 Navigate</a>
+ <a class="btn" href="https://maps.google.com/?q=${x.pos.lat},${x.pos.lng}">🗺 Map</a></div>`
+ :'<div class="loc">No house location saved yet</div>'}
+ <div class="row"><button class="ed" onclick="updLoc(${x.id})">📍 ${x.pos?'Update':'Add'} location</button></div>
+ <div class="loc" id="st${x.id}"></div>
  <div class="row"><button class="alt" onclick="again(${x.id})">+1</button>
  <button class="ed" onclick="edit(${x.id})">Edit</button>
  <button class="del" onclick="del(${x.id})">Delete</button></div></div>`).join('')}
@@ -111,5 +147,5 @@ async function exp(){const a=document.createElement('a');
 async function imp(f){if(!f)return;const a=JSON.parse(await f.text());
  for(const o of a)await put(o);show();alert('Restored '+a.length+' records')}
 if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js');
-show();
+show();locateMe();
 </script></body></html>
